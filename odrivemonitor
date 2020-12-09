@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -o nounset
+set -o errexit
+
+export TERM=${TERM:-"dumb"}
+log_error() { echo "$*" >&2; }
+log_notice() { echo "$*"; }
+
+filenames=$(mktemp --suffix ".${0##*/}")
+function finish { [[ -f "${filenames}" ]] && rm -rf "${filenames}"; }
+trap finish EXIT
+
+odrive="/opt/odrive/bin/odrive"
+
+# Get list of mounts and not allowed and print to inotify compatible file
+# TODO: this is sensitive to the output from the status command
+mounts=($(${odrive} status --mounts | sed -n -e 's;  ; ;g' -e 's;^\(.*\) status:Active$;\1;p'))
+not_allowed=($(${odrive} status --not_allowed | sed -n -e 's;  ; ;g' -e 's;^\(.*\) - Files/folders cannot be uploaded to this folder.$;\1;p'))
+if [[ ${#mounts[@]} = 0 ]]
+then
+  log_error "No mounts found" 
+  exit 1
+fi
+printf '%b\n' "${mounts[@]}" >> "${filenames}"
+printf '@%b\n' "${not_allowed[@]}" >> "${filenames}"
+echo "Got filenames"
+cat "${filenames}"
+
+sync()    { echo "Syncing ${1}"; ${odrive} sync "${1}"; }
+refresh() { echo "Refresh ${1}"; ${odrive} refresh "${1}"; }
+emptytrash() {
+  # deletes only seem to take effect in cloud once emptytrash has been run
+  # However, there seems to be a delay until the command works, so call in a loop
+  echo "Emptying trash"
+  declare -i elapsed=0 delay=10 wait=30
+  until (( elapsed >= wait )) ; do
+    sleep $delay
+    (( elapsed += delay ))
+    echo "Emptying trash: $elapsed"
+    ${odrive} emptytrash
+  done
+}
+
+inotify_args=(
+--quiet
+--monitor
+--recursive
+--event create
+--event modify
+--event move
+--event delete
+--exclude '/[.]~[^/]*$'   # ignore the temp file odrive creates before the .cloudf
+--fromfile ${filenames}
+)
+
+while true ; do
+  inotifywait --format '%:e;%w;%f' "${inotify_args[@]}" \
+  | while IFS=';' read -r event dir file ; do
+    echo "Got ${event} for dir ${dir} and ${file}"
+    suffix="${file##*.}"	
+    case ${event} in
+    DELETE*)
+      [[ ${suffix} = cloud* ]] && continue  # ignore delete of place holder files
+      refresh "${dir}"
+      emptytrash &
+      ;;
+    CREATE*|MODIFY*|MOVE*)
+      # Refresh or sync depending on suffix
+      if [[ ${suffix} != cloud* ]] ; then
+        refresh "${dir}"
+      else
+        sync "${dir}/${file}"
+      fi
+      ;;
+    esac
+  done
+done
+
