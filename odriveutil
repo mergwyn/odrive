@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -o nounset
+set -o errexit
+
+odrive="/opt/odrive/bin/odrive"
+dir=/home/gary/odrive
+
+#mounts=($(${odrive} status --mounts | sed -n -e 's;  ; ;g' -e 's;^\(.*\) status:Active$;\1;p'))
+#not_allowed=($(${odrive} status --not_allowed | sed -n -e 's;  ; ;g' -e 's;^\(.*\) - Files/folders cannot be uploaded to this folder.$;\1;p'))
+
+
+#sync() { echo "Syncing ${1}"; echo ${odrive} sync "${1}"; }
+#refresh() { echo "Refresh ${1}"; echo ${odrive} refresh "${1}"; }
+emptytrash() {
+  echo "Emptying trash"
+  ${odrive} emptytrash
+}
+fullsync() {
+    output=start
+    until [[ ${output} = '' ]] ; do
+      output=$(find "${dir}"/* -name "*.cloud*" -print -exec "${odrive}" sync {} \; )
+    done
+}
+
+fullrefresh() {
+    find "${dir}"/ -path "${dir}/.zfs" -prune -o -type d -print -exec "${odrive}" refresh {} \;
+}
+
+$1
