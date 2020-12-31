@@ -86,14 +86,14 @@ while true ; do
     DELETE*)
       [[ ${suffix} = cloud* ]] && continue  # ignore delete of place holder files
       refresh "${dir}"
-      echo "emptytrash ${dir}/${file}" > $FIFO
+      echo "emptytrash ${dir}${file}" > $FIFO
       ;;
     CREATE*|MODIFY*|MOVE*)
       # Refresh or sync depending on suffix
       if [[ ${suffix} != cloud* ]] ; then
         refresh "${dir}"
       else
-        sync "${dir}/${file}"
+        sync "${dir}${file}"
       fi
       ;;
     esac
