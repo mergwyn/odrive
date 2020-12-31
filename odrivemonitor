@@ -52,9 +52,9 @@ emptytrash() {
       while read -r -s -t 0.5 ; do
         log_debug "Emptying $REPLY from pipe"
       done
-      log_debug Pipe empty
-      log_debug Sleep for ${trashdelay} and then run emptytrash
+      log_debug Pipe empty, sleep for ${trashdelay} 
       sleep ${trashdelay}
+      log_debug Run emptytrash
       ${odrive} emptytrash
       log_debug "emptytrash completed, now returning to read"
     done < $FIFO
