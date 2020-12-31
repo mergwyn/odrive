@@ -3,14 +3,26 @@ set -o nounset
 set -o errexit
 
 export TERM=${TERM:-"dumb"}
+log_debug() { echo "$*" >&2; }
 log_error() { echo "$*" >&2; }
 log_notice() { echo "$*"; }
 
-filenames=$(mktemp --suffix ".${0##*/}")
-function finish { [[ -f "${filenames}" ]] && rm -rf "${filenames}"; }
-trap finish EXIT
-
 odrive="/opt/odrive/bin/odrive"
+filenames=$(mktemp --suffix ".${0##*/}")
+FIFO=$(mktemp --dry-run --suffix ".fifo")
+trashdelay=30
+
+if [ ! -e "$FIFO" ]; then
+  mkfifo "$FIFO"
+fi
+
+function finish {
+  ${odrive} emptytrash
+  [[ -e "${FIFO}" ]] && rm -rf ${FIFO}
+  [[ -f "${filenames}" ]] && rm -rf "${filenames}"
+  kill $DAEMON || true
+}
+trap finish EXIT SIGINT SIGHUP
 
 # Get list of mounts and not allowed and print to inotify compatible file
 # TODO: this is sensitive to the output from the status command
@@ -29,17 +41,29 @@ cat "${filenames}"
 sync()    { echo "Syncing ${1}"; ${odrive} sync "${1}"; }
 refresh() { echo "Refresh ${1}"; ${odrive} refresh "${1}"; }
 emptytrash() {
-  # deletes only seem to take effect in cloud once emptytrash has been run
-  # However, there seems to be a delay until the command works, so call in a loop
-  echo "Emptying trash"
-  declare -i elapsed=0 delay=10 wait=30
-  until (( elapsed >= wait )) ; do
-    sleep $delay
-    (( elapsed += delay ))
-    echo "Emptying trash: $elapsed"
-    ${odrive} emptytrash
+# deletes only seem to take effect in cloud once emptytrash has been run
+# However, there seems to be a delay until the command works..
+# Read from fifo when emptytrash is required.
+  log_notice "Trash daemon started"
+  while true ; do
+    while read -r -s ; do
+      log_debug "Read '$REPLY' from pipe"
+      log_debug Emptying pipe
+      while read -r -s -t 0.5 ; do
+        log_debug "Emptying $REPLY from pipe"
+      done
+      log_debug Pipe empty
+      log_debug Sleep for ${trashdelay} and then run emptytrash
+      sleep ${trashdelay}
+      ${odrive} emptytrash
+      log_debug "emptytrash completed, now returning to read"
+    done < $FIFO
   done
 }
+
+emptytrash&
+DAEMON=$!
+log_debug emptytrash started as $DAEMON
 
 inotify_args=(
 --quiet
@@ -62,7 +86,7 @@ while true ; do
     DELETE*)
       [[ ${suffix} = cloud* ]] && continue  # ignore delete of place holder files
       refresh "${dir}"
-      emptytrash &
+      echo "emptytrash ${dir}/${file}" > $FIFO
       ;;
     CREATE*|MODIFY*|MOVE*)
       # Refresh or sync depending on suffix
