@@ -8,21 +8,15 @@ log_error() { echo "$*" >&2; }
 log_notice() { echo "$*"; }
 
 odrive="/opt/odrive/bin/odrive"
-filenames=$(mktemp --suffix ".${0##*/}")
-FIFO=$(mktemp --dry-run --suffix ".fifo")
+tempdir=$(mktemp --directory --suffix ".${0##*/}")
+filenames="${tempdir}/filenames"
+FIFO="${tempdir}/fifo"
 trashdelay=30
 
 if [ ! -e "$FIFO" ]; then
   mkfifo "$FIFO"
 fi
 
-function finish {
-  ${odrive} emptytrash
-  [[ -e "${FIFO}" ]] && rm -rf ${FIFO}
-  [[ -f "${filenames}" ]] && rm -rf "${filenames}"
-  kill $DAEMON || true
-}
-trap finish EXIT SIGINT SIGHUP
 
 # Get list of mounts and not allowed and print to inotify compatible file
 # TODO: this is sensitive to the output from the status command
@@ -64,6 +58,13 @@ emptytrash() {
 emptytrash&
 DAEMON=$!
 log_debug emptytrash started as $DAEMON
+
+function finish {
+  ${odrive} emptytrash
+  [[ -d "${tempdir}" ]] && "rm -rf ${tempdir}"
+  kill $DAEMON || true
+}
+trap finish EXIT SIGINT SIGHUP
 
 inotify_args=(
 --quiet
